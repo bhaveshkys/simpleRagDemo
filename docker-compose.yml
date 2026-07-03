@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  postgres:
+    image: ankane/pgvector:latest # PostgreSQL image with vector support
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: bhavesh
+      POSTGRES_DB: simple_rag
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+volumes:
+  pgdata:
