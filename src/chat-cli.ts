@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { AppService } from './app.service';
+import { AppService, ChatMessage } from './app.service';
 import { generateRandomProfile } from './customer-profile';
 import * as readline from 'readline';
 import * as dotenv from 'dotenv';
@@ -15,6 +15,8 @@ async function bootstrap() {
 
   // 1. Generate active customer profile
   const profile = generateRandomProfile();
+
+  const history: ChatMessage[] = [];
 
   console.clear();
   console.log('==================================================');
@@ -54,10 +56,21 @@ async function bootstrap() {
       process.stdout.write('Agent: ');
 
       // 2. Fetch context, build prompt, and call Gemini API (streaming response to stdout)
+      let fullResponse = '';
       try {
-        await appService.getChatResponseStream(userInput, profile, (chunk) => {
+        await appService.getChatResponseStream(userInput, profile, history, (chunk) => {
           process.stdout.write(chunk);
+          fullResponse += chunk;
         });
+
+        history.push({ role: 'user', content: userInput });
+        history.push({ role: 'assistant', content: fullResponse });
+
+        // Limit the history to the last 20 messages (10 turns) to avoid exceeding context window limits
+        const MAX_HISTORY = 20;
+        if (history.length > MAX_HISTORY) {
+          history.splice(0, history.length - MAX_HISTORY);
+        }
       } catch (error) {
         console.error('\nError during streaming chat response:', error);
       }

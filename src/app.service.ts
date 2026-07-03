@@ -8,6 +8,11 @@ import { GoogleGenAI } from '@google/genai';
 import { CustomerProfile } from './customer-profile';
 import { OpenAI } from 'openai';
 
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
@@ -142,6 +147,7 @@ export class AppService {
   async getChatResponseStream(
     userInput: string,
     profile: CustomerProfile,
+    history: ChatMessage[],
     callback: (chunk: string) => void,
   ): Promise<void> {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -182,8 +188,8 @@ export class AppService {
       return;
     }
 
-    // 3. Construct prompt
-    const prompt = await this.buildAgentPrompt(userInput, retrievedDocs, profile);
+    // 3. Construct system prompt
+    const systemPrompt = await this.buildAgentPrompt(retrievedDocs, profile);
 
     // 4. Generate content stream using OpenRouter
     const openrouterApiKey = process.env.OPENROUTER_API_KEY;
@@ -203,17 +209,64 @@ export class AppService {
       },
     });
 
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: userInput },
+    ];
+
+    let rawBuffer = '';
+    let printedLength = 0;
+
     try {
       const responseStream = await openai.chat.completions.create({
         model: openrouterModel,
-        messages: [{ role: 'user', content: prompt }],
+        messages: messages as any,
         stream: true,
       });
 
       for await (const chunk of responseStream) {
         const text = chunk.choices[0]?.delta?.content;
         if (text) {
-          callback(text);
+          rawBuffer += text;
+
+          let extracted = '';
+          const matches = [...rawBuffer.matchAll(/<output>([\s\S]*?)(?:<\/output>|$)/g)];
+          for (let i = 0; i < matches.length; i++) {
+            const match = matches[i];
+            let content = match[1];
+
+            const isLast = i === matches.length - 1;
+            const matchedAll = match[0].endsWith('</output>');
+            if (isLast && !matchedAll) {
+              const closeTag = '</output>';
+              for (let j = 1; j < closeTag.length; j++) {
+                const prefix = closeTag.substring(0, j);
+                if (content.endsWith(prefix)) {
+                  content = content.substring(0, content.length - prefix.length);
+                  break;
+                }
+              }
+            }
+            extracted += content;
+          }
+
+          if (extracted.length > printedLength) {
+            const toPrint = extracted.substring(printedLength);
+            callback(toPrint);
+            printedLength = extracted.length;
+          }
+        }
+      }
+
+      // Safe fallback if the model completely forgot to use <output> tags
+      if (printedLength === 0 && rawBuffer.trim().length > 0) {
+        let fallback = rawBuffer.replace(/<thinking>[\s\S]*?(?:<\/thinking>|$)/g, '');
+        fallback = fallback.replace(/<error>[\s\S]*?(?:<\/error>|$)/g, '');
+        fallback = fallback.replace(/<[^>]*>/g, ''); // strip any remaining XML tags
+        const cleaned = fallback.trim();
+        if (cleaned.length > 0) {
+          callback(cleaned);
         }
       }
     } catch (err) {
@@ -233,12 +286,28 @@ export class AppService {
   }
 
   private async buildAgentPrompt(
-    userQuery: string,
     retrievedDocs: string[],
     profile: CustomerProfile
   ): Promise<string> {
     return `
 Role: You are an AuraShop customer support agent. Be helpful, professional, and concise.
+
+You MUST structure your response using XML tags:
+1. Place all your internal thoughts, policy checks, date calculations, and step-by-step reasoning inside <thinking>...</thinking> tags.
+2. If there is an error, a policy constraint violation, or you cannot answer, place the error description/explanation inside <error>...</error> tags.
+3. Place your final, clean conversational response to the customer inside <output>...</output> tags.
+
+Only the text inside <output> tags will be shown to the user. Do not put any customer-facing conversational replies outside the <output> tags.
+Example:
+<thinking>
+1. User is asking for a refund.
+2. Check policy for refund eligibility.
+3. Calculate days since delivery.
+4. Compare with policy.
+</thinking>
+<error>User is not eligible for refund.</error>
+<output>I'm sorry, you are not eligible for a refund.</output>
+
 Here is the profile of the customer you are currently chatting with:
 <customer_profile>
 Location: ${profile.location}
@@ -259,9 +328,7 @@ Constraints:
 2. Calculate dates carefully. Compare the "Days Since Delivery" with the return window in the policy.
 3. If the user asks about data sales or monetization, evaluate based on their Location and Partner Program status.
 4. The partner Program is just about data sharing and does not grant any other favour in refund or exchange 
-4. Do NOT make up facts. If the retrieved documentation does not contain the answer, say "I'm sorry, I don't have that information."
-
-Customer Query: "${userQuery}"
-`;
+5. Do NOT make up facts. If the retrieved documentation does not contain the answer, say "I'm sorry, I don't have that information."
+6. Under no circumstances should you extrapolate, assume, or generate step-by-step procedures, requirements, or instructions (such as how to enroll, sign up, or upgrade) that are not explicitly detailed in the provided <documentation>. If they are missing, reply: "I'm sorry, I don't have that information."`;
   }
 }
