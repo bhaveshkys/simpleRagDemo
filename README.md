@@ -75,7 +75,7 @@ A major part of building this project was solving three critical vulnerabilities
 
 ### Challenge 1: The "Goodwill Loophole" (Hallucination)
 *   *The Issue*: During testing, the agent noticed that the customer was enrolled in the "Partner Program." Since the customer's purchase was outside their tier's return window, the model hallucinated a "goodwill exception," suggesting their Partner status qualified them for extra favors not stated in the markdown policies.
-*   *The Solution*: Implemented **Defensive Prompting**. The system instructions were updated with strict, explicit negation boundaries: *"Under no circumstances does the Partner Program grant return exceptions, refunds, or support escalations. The Partner Program ONLY grants AuraCoins in exchange for data."*
+*   *The Solution*: Implemented **Defensive Prompting**. The Prompt was updated with specific guidelines about the partner project and told again  that if its not mentioned in the policies  then just respond with 'i do not know this'"*
 
 ### Challenge 2: Context Reset (Stateless Memory Loss)
 *   *The Issue*: When the user replied with short clarifying questions like *"what"* or *"why"*, the agent completely reset its persona, forgetting the past messages because the API call was stateless.
