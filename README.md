@@ -116,3 +116,54 @@ Example:
 <error>User is not eligible for refund.</error>
 <output>I'm sorry, you are not eligible for a refund.</output>
 ```
+## 6. Taking it to the Next Level: Human-in-the-Loop (HITL) Feedback Loop
+(The below code changes are in branch HITL)
+
+### The Problem
+Because our policy documents are sparse, customers asking questions even slightly outside the original scope are met with the default response: *"I don't have this information."* In traditional systems, resolving this requires a developer to manually rewrite the policies, regenerate the entire database embeddings, and redeploy.
+
+### The Solution
+We implemented a **Human-in-the-Loop (HITL) Feedback Loop** to dynamically close this knowledge gap. When the bot fails to answer a query, it logs the question. A separate admin CLI allows the store owner to answer these gaps. Once answered, the new Q&A pair is instantly embedded and added to the RAG database, allowing the bot to learn in real-time.
+
+```mermaid
+flowchart LR
+    A[Customer Query] -->|No Match / Low Score| B(Log to Unanswered DB)
+    B -->|npm run admin| C[Admin CLI Interface]
+    C -->|Admin Types Answer| D(Embed Q&A Block)
+    D -->|Insert Vector| E[(Postgres pgvector)]
+    E -->|Next Query| F[Bot Knows Answer! ✅]
+```
+
+### Implementation Steps
+
+#### Step 1: Database Schema Expansion
+Create a new database entity called `UnansweredQuestion` (represented as an `unanswered_questions` table) containing:
+*   `id`: Primary Key (auto-incrementing integer).
+*   `rawQuery`: The original string sent by the customer.
+*   `status`: A status flag set to `PENDING` by default, toggled to `ANSWERED` once resolved.
+*   `createdAt`: Timestamp of when the gap was identified.
+
+#### Step 2: Gap Detection & Logging
+Modify your chat generation service logic:
+1.  Check the similarity scores of the retrieved database chunks.
+2.  If the highest score is below a safe threshold (e.g. `similarity < 0.70`), or if zero chunks are returned:
+    *   Save the customer's raw query into the `unanswered_questions` table with `status: 'PENDING'`.
+    *   Instruct the bot to respond with the default fallback text.
+
+#### Step 3: Interactive Admin Interface (`npm run admin`)
+Create a standalone NestJS CLI script (`src/admin-cli.ts`) triggered by a custom npm script:
+1.  Query the `unanswered_questions` table for all records where `status = 'PENDING'`.
+2.  Using Node's native `readline` module, present the questions to the terminal one-by-one.
+3.  Accept keyboard input for the answer.
+
+#### Step 4: Live Ingestion & Status Resolution
+When the admin submits an answer:
+1.  Assemble a structured markdown text string:
+    ```markdown
+    # Q&A: [Topic]
+    Question: [Customer's raw query]
+    Answer: [Admin's typed response]
+    ```
+2.  Pass this new string to the Google `text-embedding-004` model to generate its 768-dimension vector.
+3.  Insert the text, metadata (`{ category: "admin_qa" }`), and vector directly into the main `document_chunks` table, making it immediately active.
+4.  Update the state of the question in the `unanswered_questions` table to `ANSWERED`.
