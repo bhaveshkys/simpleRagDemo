@@ -135,35 +135,49 @@ flowchart LR
 ```
 
 ### Implementation Steps
-
 #### Step 1: Database Schema Expansion
-Create a new database entity called `UnansweredQuestion` (represented as an `unanswered_questions` table) containing:
+Create a database entity called `UnansweredQuestion` (an `unanswered_questions` table) containing:
 *   `id`: Primary Key (auto-incrementing integer).
-*   `rawQuery`: The original string sent by the customer.
-*   `status`: A status flag set to `PENDING` by default, toggled to `ANSWERED` once resolved.
-*   `createdAt`: Timestamp of when the gap was identified.
+*   `rawQuery`: The customer query text to be resolved.
+*   `status`: A string status set to `PENDING` by default, toggled to `ANSWERED` once resolved.
+*   `createdAt`: Timestamp of creation.
+#### Step 2: Agentic Tool Call Design
+Instruct the AI in the system prompt to evaluate document relevance. If the retrieved database context is silent or insufficient, the AI must emit a simulated tool call tag directly in its text generation:
+```xml
+<log_unresolved_question question="[insert customer's raw question here]" />
+```
+### Step 3: Regex Interception & Ingestion
+In the NestJS backend service, run a parser on the model's output stream:
 
-#### Step 2: Gap Detection & Logging
-Modify your chat generation service logic:
-1.  Check the similarity scores of the retrieved database chunks.
-2.  If the highest score is below a safe threshold (e.g. `similarity < 0.70`), or if zero chunks are returned:
-    *   Save the customer's raw query into the `unanswered_questions` table with `status: 'PENDING'`.
-    *   Instruct the bot to respond with the default fallback text.
+Use a regular expression to search for the pattern:
+``` typescript
 
-#### Step 3: Interactive Admin Interface (`npm run admin`)
-Create a standalone NestJS CLI script (`src/admin-cli.ts`) triggered by a custom npm script:
-1.  Query the `unanswered_questions` table for all records where `status = 'PENDING'`.
-2.  Using Node's native `readline` module, present the questions to the terminal one-by-one.
-3.  Accept keyboard input for the answer.
 
-#### Step 4: Live Ingestion & Status Resolution
-When the admin submits an answer:
-1.  Assemble a structured markdown text string:
-    ```markdown
-    # Q&A: [Topic]
-    Question: [Customer's raw query]
-    Answer: [Admin's typed response]
-    ```
-2.  Pass this new string to the Google `text-embedding-004` model to generate its 768-dimension vector.
-3.  Insert the text, metadata (`{ category: "admin_qa" }`), and vector directly into the main `document_chunks` table, making it immediately active.
+const logTagRegex = /<log_unresolved_question question="([\s\S]*?)" \/>/;
+```
+If the tag is detected in the stream:
+Extract the text inside the question attribute.
+Write an asynchronous save query to the unanswered_questions database table with the status set to PENDING.
+Filter out the raw tag from the response text so the customer does not see the database query commands in their chat window.
+
+### Step 4: Interactive Admin Interface (npm run admin)
+Create a standalone NestJS CLI script (src/admin-cli.ts):
+
+Fetch all pending questions from the unanswered_questions table.
+Use Node's native readline module to present the questions to the terminal one-by-one.
+Prompt the admin to type out the official policy answer.
+### Step 5: Live Ingestion & Status Resolution
+When the admin submits the answer:
+
+Assemble a structured markdown text string:
+markdown
+
+
+# Q&A: [Topic]
+Question: [Customer's raw query]
+Answer: [Admin's typed response]
+
+Call the Google text-embedding-004 API to generate the vector for the new Q&A block.
+Insert the text, metadata, and vector directly into the main document_chunks table, making it immediately available for future RAG searches.
+Update the status of the question in unanswered_questions to ANSWERED.immediately active.
 4.  Update the state of the question in the `unanswered_questions` table to `ANSWERED`.
