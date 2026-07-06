@@ -180,4 +180,3 @@ Answer: [Admin's typed response]
 Call the Google text-embedding-004 API to generate the vector for the new Q&A block.
 Insert the text, metadata, and vector directly into the main document_chunks table, making it immediately available for future RAG searches.
 Update the status of the question in unanswered_questions to ANSWERED.immediately active.
-4.  Update the state of the question in the `unanswered_questions` table to `ANSWERED`.
