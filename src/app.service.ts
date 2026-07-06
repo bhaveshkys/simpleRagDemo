@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { DocumentChunk } from './document/document.entity';
+import { UnresolvedQuestion } from './document/unresolved-question.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -20,6 +21,8 @@ export class AppService {
   constructor(
     @InjectRepository(DocumentChunk)
     private readonly documentRepository: Repository<DocumentChunk>,
+    @InjectRepository(UnresolvedQuestion)
+    private readonly unresolvedRepository: Repository<UnresolvedQuestion>,
   ) {}
 
   getHello(): string {
@@ -152,7 +155,9 @@ export class AppService {
   ): Promise<void> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY is not defined in the environment variables.');
+      throw new Error(
+        'GEMINI_API_KEY is not defined in the environment variables.',
+      );
     }
     const ai = new GoogleGenAI({ apiKey });
 
@@ -173,7 +178,9 @@ export class AppService {
       queryEmbedding = values;
     } catch (err) {
       this.logger.error('Error generating query embedding:', err);
-      callback("I'm sorry, I encountered an issue generating embeddings for your query.");
+      callback(
+        "I'm sorry, I encountered an issue generating embeddings for your query.",
+      );
       return;
     }
 
@@ -181,7 +188,9 @@ export class AppService {
     let retrievedDocs: string[] = [];
     try {
       const similarChunks = await this.findSimilarChunks(queryEmbedding, 3);
-      retrievedDocs = similarChunks.map(c => `[Source File: ${c.title}]\n${c.content}`);
+      retrievedDocs = similarChunks.map(
+        (c) => `[Source File: ${c.title}]\n${c.content}`,
+      );
     } catch (err) {
       this.logger.error('Error querying database for similar chunks:', err);
       callback("I'm sorry, I had trouble searching my database for documents.");
@@ -189,13 +198,17 @@ export class AppService {
     }
 
     // 3. Construct system prompt
-    const systemPrompt = await this.buildAgentPrompt(retrievedDocs, profile);
+    const systemPrompt = this.buildAgentPrompt(retrievedDocs, profile);
 
     // 4. Generate content stream using OpenRouter
     const openrouterApiKey = process.env.OPENROUTER_API_KEY;
     if (!openrouterApiKey) {
-      this.logger.error('OPENROUTER_API_KEY is not defined in the environment variables.');
-      callback("I'm sorry, I'm missing the required API credentials to generate a chat response.");
+      this.logger.error(
+        'OPENROUTER_API_KEY is not defined in the environment variables.',
+      );
+      callback(
+        "I'm sorry, I'm missing the required API credentials to generate a chat response.",
+      );
       return;
     }
 
@@ -221,7 +234,8 @@ export class AppService {
     try {
       const responseStream = await openai.chat.completions.create({
         model: openrouterModel,
-        messages: messages as any,
+        messages:
+          messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
         stream: true,
       });
 
@@ -231,7 +245,9 @@ export class AppService {
           rawBuffer += text;
 
           let extracted = '';
-          const matches = [...rawBuffer.matchAll(/<output>([\s\S]*?)(?:<\/output>|$)/g)];
+          const matches = [
+            ...rawBuffer.matchAll(/<output>([\s\S]*?)(?:<\/output>|$)/g),
+          ];
           for (let i = 0; i < matches.length; i++) {
             const match = matches[i];
             let content = match[1];
@@ -243,7 +259,10 @@ export class AppService {
               for (let j = 1; j < closeTag.length; j++) {
                 const prefix = closeTag.substring(0, j);
                 if (content.endsWith(prefix)) {
-                  content = content.substring(0, content.length - prefix.length);
+                  content = content.substring(
+                    0,
+                    content.length - prefix.length,
+                  );
                   break;
                 }
               }
@@ -261,7 +280,10 @@ export class AppService {
 
       // Safe fallback if the model completely forgot to use <output> tags
       if (printedLength === 0 && rawBuffer.trim().length > 0) {
-        let fallback = rawBuffer.replace(/<thinking>[\s\S]*?(?:<\/thinking>|$)/g, '');
+        let fallback = rawBuffer.replace(
+          /<thinking>[\s\S]*?(?:<\/thinking>|$)/g,
+          '',
+        );
         fallback = fallback.replace(/<error>[\s\S]*?(?:<\/error>|$)/g, '');
         fallback = fallback.replace(/<[^>]*>/g, ''); // strip any remaining XML tags
         const cleaned = fallback.trim();
@@ -269,13 +291,35 @@ export class AppService {
           callback(cleaned);
         }
       }
+
+      // Check if response indicates the question was unresolved via simulated tool call tag
+      const hasLogTag = rawBuffer.includes('<log_unresolved_question');
+      if (hasLogTag) {
+        const logMatch = rawBuffer.match(
+          /<log_unresolved_question\s+question=["']([^"']*)["']\s*\/?>/i,
+        );
+        const unresolvedQuestion =
+          (logMatch && logMatch[1] && logMatch[1].trim()) || userInput;
+        this.saveUnresolvedQuestion(unresolvedQuestion).catch((err) => {
+          this.logger.error(
+            `Failed to save unresolved question: "${unresolvedQuestion}"`,
+            err,
+          );
+        });
+      }
     } catch (err) {
-      this.logger.error('Error generating chat response stream via OpenRouter:', err);
-      callback("\n[Error occurred during stream generation.]");
+      this.logger.error(
+        'Error generating chat response stream via OpenRouter:',
+        err,
+      );
+      callback('\n[Error occurred during stream generation.]');
     }
   }
 
-  async findSimilarChunks(queryEmbedding: number[], limit = 3): Promise<DocumentChunk[]> {
+  async findSimilarChunks(
+    queryEmbedding: number[],
+    limit = 3,
+  ): Promise<DocumentChunk[]> {
     const embeddingString = `[${queryEmbedding.join(',')}]`;
     return this.documentRepository
       .createQueryBuilder('chunk')
@@ -285,20 +329,92 @@ export class AppService {
       .getMany();
   }
 
-  private async buildAgentPrompt(
+  async saveUnresolvedQuestion(question: string): Promise<void> {
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion) return;
+
+    const existing = await this.unresolvedRepository.findOne({
+      where: { question: trimmedQuestion, resolved: false },
+    });
+    if (!existing) {
+      const unresolved = new UnresolvedQuestion();
+      unresolved.question = trimmedQuestion;
+      await this.unresolvedRepository.save(unresolved);
+      this.logger.debug(
+        `Logged unresolved question in database: "${trimmedQuestion}"`,
+      );
+    }
+  }
+
+  async ingestAdminAnswer(question: string, answer: string): Promise<void> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'GEMINI_API_KEY is not defined in the environment variables.',
+      );
+    }
+    const ai = new GoogleGenAI({ apiKey });
+
+    const content = `Question: ${question}\nAnswer: ${answer}`;
+    this.logger.log(`Generating embedding for admin answer...`);
+
+    const response = await ai.models.embedContent({
+      model: 'gemini-embedding-001',
+      contents: content,
+      config: {
+        outputDimensionality: 768,
+      },
+    });
+
+    const values = response.embeddings?.[0]?.values;
+    if (!values || values.length === 0) {
+      throw new Error('Failed to generate embedding values for admin answer');
+    }
+
+    const documentChunk = new DocumentChunk();
+    documentChunk.title = 'admin_answers.md';
+    documentChunk.content = content;
+    documentChunk.metadata = {
+      source: 'admin_input',
+      date: new Date().toISOString(),
+    };
+    documentChunk.embedding = values;
+
+    await this.documentRepository.save(documentChunk);
+    this.logger.log(`Ingested admin answer for question: "${question}"`);
+  }
+
+  async getUnresolvedQuestions(): Promise<UnresolvedQuestion[]> {
+    return this.unresolvedRepository.find({
+      where: { resolved: false },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  async resolveQuestion(id: number): Promise<void> {
+    await this.unresolvedRepository.update(id, { resolved: true });
+  }
+
+  async deleteQuestion(id: number): Promise<void> {
+    await this.unresolvedRepository.delete(id);
+  }
+
+  private buildAgentPrompt(
     retrievedDocs: string[],
-    profile: CustomerProfile
-  ): Promise<string> {
+    profile: CustomerProfile,
+  ): string {
     return `
 Role: You are an AuraShop customer support agent. Be helpful, professional, and concise.
 
 You MUST structure your response using XML tags:
 1. Place all your internal thoughts, policy checks, date calculations, and step-by-step reasoning inside <thinking>...</thinking> tags.
 2. If there is an error, a policy constraint violation, or you cannot answer, place the error description/explanation inside <error>...</error> tags.
-3. Place your final, clean conversational response to the customer inside <output>...</output> tags.
+3. If the retrieved <documentation> does NOT contain the answer or is silent about the customer's question, you MUST execute a simulated tool call by emitting the tag: <log_unresolved_question question="[insert customer's raw question here]" />. Put this tag right after the </thinking> tag and before the <output> tag.
+4. Place your final, clean conversational response to the customer inside <output>...</output> tags.
 
 Only the text inside <output> tags will be shown to the user. Do not put any customer-facing conversational replies outside the <output> tags.
-Example:
+
+Example 1 (Eligible/Ineligible Policy Query):
 <thinking>
 1. User is asking for a refund.
 2. Check policy for refund eligibility.
@@ -307,6 +423,16 @@ Example:
 </thinking>
 <error>User is not eligible for refund.</error>
 <output>I'm sorry, you are not eligible for a refund.</output>
+
+Example 2 (Unresolved/Undocumented Query):
+<thinking>
+1. User is asking if we ship to India.
+2. Check retrieved documentation.
+3. Documentation does not contain shipping policies to India.
+4. Mark as unresolved.
+</thinking>
+<log_unresolved_question question="hey, do you ship to india" />
+<output>I'm sorry, I don't have that information. I have logged your question for our support team to look into.</output>
 
 Here is the profile of the customer you are currently chatting with:
 <customer_profile>
@@ -329,6 +455,6 @@ Constraints:
 3. If the user asks about data sales or monetization, evaluate based on their Location and Partner Program status.
 4. The partner Program is just about data sharing and does not grant any other favour in refund or exchange 
 5. Do NOT make up facts. If the retrieved documentation does not contain the answer, say "I'm sorry, I don't have that information."
-6. Under no circumstances should you extrapolate, assume, or generate step-by-step procedures, requirements, or instructions (such as how to enroll, sign up, or upgrade) that are not explicitly detailed in the provided <documentation>. If they are missing, reply: "I'm sorry, I don't have that information."`;
+6. Under no circumstances should you extrapolate, assume, or generate step-by-step procedures, requirements, or instructions (such as how to enroll, sign up, or upgrade) that are not explicitly detailed in the provided <documentation>. If they are missing, you MUST emit the <log_unresolved_question question="..." /> tag and reply: "I'm sorry, I don't have that information."`;
   }
 }

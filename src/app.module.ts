@@ -3,20 +3,22 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DocumentChunk } from './document/document.entity';
+import { UnresolvedQuestion } from './document/unresolved-question.entity';
 @Module({
-  imports: [TypeOrmModule.forRoot({
-    type: 'postgres',
-    host: 'localhost',
-    port: 5432,
-    username: 'postgres',
-    password: 'bhavesh',
-    database: 'simple_rag',
-    entities: [__dirname + '/**/*.entity.{js,ts}'],
-    synchronize: true,
-  }),
-  TypeOrmModule.forFeature([DocumentChunk])
-],
+  imports: [
+    TypeOrmModule.forRoot({
+      type: 'postgres',
+      host: 'localhost',
+      port: 5432,
+      username: 'postgres',
+      password: 'bhavesh',
+      database: 'simple_rag',
+      entities: [__dirname + '/**/*.entity.{js,ts}'],
+      synchronize: true,
+    }),
+    TypeOrmModule.forFeature([DocumentChunk, UnresolvedQuestion]),
+  ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}

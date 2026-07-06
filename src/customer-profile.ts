@@ -5,7 +5,7 @@ export interface CustomerProfile {
   purchasedItem: string;
   itemCategory: 'clothing' | 'electronics' | 'other';
   purchaseDate: string; // e.g. "2026-06-20"
-  currentDate: string;  // e.g. "2026-07-03" (local time)
+  currentDate: string; // e.g. "2026-07-03" (local time)
   daysSinceDelivery: number;
   itemIssue: 'damaged/defective' | 'change of mind';
   enrolledInPartnerProgram: boolean;
@@ -26,10 +26,10 @@ export function generateRandomProfile(): CustomerProfile {
 
   return {
     name: 'Alex Rivera',
-    location: (['California', 'Texas', 'New York'])[
+    location: ['California', 'Texas', 'New York'][
       Math.floor(Math.random() * 3)
     ] as any,
-    tier: (['Bronze', 'Silver', 'Gold'])[Math.floor(Math.random() * 3)] as any,
+    tier: ['Bronze', 'Silver', 'Gold'][Math.floor(Math.random() * 3)] as any,
     purchasedItem: selectedItem.name,
     itemCategory: selectedItem.category as any,
     purchaseDate: purchaseDateObj.toISOString().split('T')[0],

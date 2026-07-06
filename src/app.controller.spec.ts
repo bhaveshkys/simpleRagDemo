@@ -3,6 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentChunk } from './document/document.entity';
+import { UnresolvedQuestion } from './document/unresolved-question.entity';
 
 describe('AppController', () => {
   let appController: AppController;
@@ -18,6 +19,14 @@ describe('AppController', () => {
             clear: jest.fn(),
             save: jest.fn(),
             createQueryBuilder: jest.fn(),
+          },
+        },
+        {
+          provide: getRepositoryToken(UnresolvedQuestion),
+          useValue: {
+            findOne: jest.fn(),
+            save: jest.fn(),
+            find: jest.fn(),
           },
         },
       ],
